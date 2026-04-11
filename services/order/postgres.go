@@ -1,0 +1,51 @@
+package order
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+// PostgresRepository implementa la interfaz Repository usando pgxpool.
+type PostgresRepository struct {
+	db *pgxpool.Pool
+}
+
+// NewPostgresRepository crea una nueva instancia.
+func NewPostgresRepository(db *pgxpool.Pool) *PostgresRepository {
+	return &PostgresRepository{db: db}
+}
+
+// Save persiste la orden en Postgres.
+func (r *PostgresRepository) Save(ctx context.Context, o *Order) error {
+	query := `INSERT INTO orders (id, user_id, product_id, quantity, status) VALUES ($1, $2, $3, $4, $5)`
+	_, err := r.db.Exec(ctx, query, o.ID, o.UserID, o.ProductID, o.Quantity, o.Status)
+	if err != nil {
+		return fmt.Errorf("error saving order: %w", err)
+	}
+	return nil
+}
+
+// GetByID busca una orden por ID en Postgres.
+func (r *PostgresRepository) GetByID(ctx context.Context, id string) (*Order, error) {
+	query := `SELECT id, user_id, product_id, quantity, status FROM orders WHERE id = $1`
+	row := r.db.QueryRow(ctx, query, id)
+
+	var o Order
+	err := row.Scan(&o.ID, &o.UserID, &o.ProductID, &o.Quantity, &o.Status)
+	if err != nil {
+		return nil, fmt.Errorf("error querying order: %w", err)
+	}
+	return &o, nil
+}
+
+// UpdateStatus actualiza el estado de la orden en Postgres.
+func (r *PostgresRepository) UpdateStatus(ctx context.Context, id string, status OrderStatus) error {
+	query := `UPDATE orders SET status = $1 WHERE id = $2`
+	_, err := r.db.Exec(ctx, query, status, id)
+	if err != nil {
+		return fmt.Errorf("error updating order status: %w", err)
+	}
+	return nil
+}
