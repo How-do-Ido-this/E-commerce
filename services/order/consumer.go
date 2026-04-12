@@ -21,25 +21,51 @@ func NewConsumer(rc *rabbitmq.Client, s *Service) *Consumer {
 
 // StartListening inicia el proceso de consumo de eventos.
 func (c *Consumer) StartListening() {
-	deliveries, err := c.client.Consume("inventory_events_queue") // Cola para escuchar eventos de inventario
+	deliveries, err := c.client.Consume(rabbitmq.OrderQueue, "order-consumer")
 	if err != nil {
 		log.Fatalf("failed to register consumer: %v", err)
 	}
 
 	for d := range deliveries {
-		// Aquí escuchamos dos tipos de eventos, podríamos usar una cabecera para diferenciar
-		// pero para simplicidad supongamos que procesamos ambos.
-		var reserved events.InventoryReserved
-		if err := json.Unmarshal(d.Body, &reserved); err == nil {
+		switch d.RoutingKey {
+		case rabbitmq.InventoryReservedKey:
+			var reserved events.InventoryReserved
+			if err := json.Unmarshal(d.Body, &reserved); err != nil {
+				log.Printf("failed to unmarshal inventory.reserved: %v", err)
+				_ = d.Nack(false, false)
+				continue
+			}
+
 			log.Printf("Received InventoryReserved event: %s", reserved.OrderID)
-			c.service.UpdateOrderStatus(context.Background(), reserved.OrderID.String(), StatusCreated)
+			if err := c.service.UpdateOrderStatus(context.Background(), reserved.OrderID.String(), StatusCreated); err != nil {
+				log.Printf("failed to update order status to CREATED: %v", err)
+				_ = d.Nack(false, true)
+				continue
+			}
+
+		case rabbitmq.InventoryFailedKey:
+			var failed events.StockInsufficient
+			if err := json.Unmarshal(d.Body, &failed); err != nil {
+				log.Printf("failed to unmarshal inventory.failed: %v", err)
+				_ = d.Nack(false, false)
+				continue
+			}
+
+			log.Printf("Received InventoryFailed event: %s", failed.OrderID)
+			if err := c.service.UpdateOrderStatus(context.Background(), failed.OrderID.String(), StatusFailed); err != nil {
+				log.Printf("failed to update order status to FAILED: %v", err)
+				_ = d.Nack(false, true)
+				continue
+			}
+
+		default:
+			log.Printf("unexpected routing key on order consumer: %s", d.RoutingKey)
+			_ = d.Nack(false, false)
 			continue
 		}
 
-		var insufficient events.StockInsufficient
-		if err := json.Unmarshal(d.Body, &insufficient); err == nil {
-			log.Printf("Received StockInsufficient event: %s", insufficient.OrderID)
-			c.service.UpdateOrderStatus(context.Background(), insufficient.OrderID.String(), StatusFailed)
+		if err := d.Ack(false); err != nil {
+			log.Printf("failed to ack message: %v", err)
 		}
 	}
 }

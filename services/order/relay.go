@@ -52,8 +52,11 @@ func (r *Relay) processOutbox(ctx context.Context) {
 			continue
 		}
 
-		// 2. Publicar en RabbitMQ
-		if err := r.rabbitClient.Publish("orders", eventType, payload); err != nil {
+		// 2. Publicar en RabbitMQ usando el ID como correlation_id
+		headers := map[string]interface{}{
+			"correlation_id": id,
+		}
+		if err := r.rabbitClient.Publish(rabbitmq.OrdersExchange, eventType, payload, headers); err != nil {
 			log.Printf("error publishing event %s: %v", id, err)
 			continue
 		}

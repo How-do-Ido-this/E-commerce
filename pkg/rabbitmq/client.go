@@ -6,6 +6,16 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
+const (
+	OrdersExchange          = "orders"
+	OrdersExchangeType      = "direct"
+	OrderCreatedKey         = "order.created"
+	InventoryReservedKey    = "inventory.reserved"
+	InventoryFailedKey      = "inventory.failed"
+	InventoryQueue          = "inventory.queue"
+	OrderQueue              = "order.queue"
+)
+
 // Client envuelve la conexión y el canal de RabbitMQ.
 type Client struct {
 	conn    *amqp.Connection
@@ -28,8 +38,69 @@ func NewClient(amqpURL string) (*Client, error) {
 	return &Client{conn: conn, channel: ch}, nil
 }
 
-// Publish envía un mensaje a un exchange.
-func (c *Client) Publish(exchange, routingKey string, body []byte) error {
+// SetupTopology declara el exchange, las colas y sus bindings.
+func (c *Client) SetupTopology() error {
+	if err := c.channel.ExchangeDeclare(
+		OrdersExchange,
+		OrdersExchangeType,
+		true,  // durable
+		false, // auto-deleted
+		false, // internal
+		false, // no-wait
+		nil,   // args
+	); err != nil {
+		return fmt.Errorf("failed to declare exchange %s: %w", OrdersExchange, err)
+	}
+
+	if _, err := c.channel.QueueDeclare(
+		InventoryQueue,
+		true,  // durable
+		false, // auto-delete
+		false, // exclusive
+		false, // no-wait
+		nil,   // args
+	); err != nil {
+		return fmt.Errorf("failed to declare queue %s: %w", InventoryQueue, err)
+	}
+
+	if err := c.channel.QueueBind(
+		InventoryQueue,
+		OrderCreatedKey,
+		OrdersExchange,
+		false,
+		nil,
+	); err != nil {
+		return fmt.Errorf("failed to bind queue %s to %s: %w", InventoryQueue, OrderCreatedKey, err)
+	}
+
+	if _, err := c.channel.QueueDeclare(
+		OrderQueue,
+		true,  // durable
+		false, // auto-delete
+		false, // exclusive
+		false, // no-wait
+		nil,   // args
+	); err != nil {
+		return fmt.Errorf("failed to declare queue %s: %w", OrderQueue, err)
+	}
+
+	for _, routingKey := range []string{InventoryReservedKey, InventoryFailedKey} {
+		if err := c.channel.QueueBind(
+			OrderQueue,
+			routingKey,
+			OrdersExchange,
+			false,
+			nil,
+		); err != nil {
+			return fmt.Errorf("failed to bind queue %s to %s: %w", OrderQueue, routingKey, err)
+		}
+	}
+
+	return nil
+}
+
+// Publish envía un mensaje a un exchange con headers (para el CorrelationID).
+func (c *Client) Publish(exchange, routingKey string, body []byte, headers map[string]interface{}) error {
 	return c.channel.Publish(
 		exchange,
 		routingKey,
@@ -38,28 +109,17 @@ func (c *Client) Publish(exchange, routingKey string, body []byte) error {
 		amqp.Publishing{
 			ContentType: "application/json",
 			Body:        body,
+			Headers:     amqp.Table(headers),
 		},
 	)
 }
 
-// Consume se suscribe a una cola y devuelve un canal de entregas.
-func (c *Client) Consume(queueName string) (<-chan amqp.Delivery, error) {
-	q, err := c.channel.QueueDeclare(
-		queueName,
-		true,  // durable
-		false, // delete when unused
-		false, // exclusive
-		false, // no-wait
-		nil,   // arguments
-	)
-	if err != nil {
-		return nil, err
-	}
-
+// Consume se suscribe a una cola con Ack manual.
+func (c *Client) Consume(queueName, consumerTag string) (<-chan amqp.Delivery, error) {
 	return c.channel.Consume(
-		q.Name,
-		"",    // consumer tag
-		true,  // auto-ack
+		queueName,
+		consumerTag,
+		false, // auto-ack
 		false, // exclusive
 		false, // no-local
 		false, // no-wait

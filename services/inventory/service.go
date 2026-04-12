@@ -5,6 +5,7 @@ import (
 	"e-commerce/pkg/events"
 	"e-commerce/pkg/rabbitmq"
 	"encoding/json"
+	"fmt"
 	"github.com/google/uuid"
 )
 
@@ -20,7 +21,11 @@ func NewService(r Repository, rc *rabbitmq.Client) *Service {
 }
 
 // ReserveStock valida y reserva stock.
-func (s *Service) ReserveStock(ctx context.Context, event events.OrderCreated) error {
+func (s *Service) ReserveStock(ctx context.Context, event events.OrderCreated, headers map[string]interface{}) error {
+	if len(event.Items) == 0 {
+		return fmt.Errorf("order.created event without items")
+	}
+
 	// 1. Obtener inventario
 	productID := event.Items[0].ProductID.String()
 	inv, err := s.repo.GetByProductID(ctx, productID)
@@ -37,7 +42,7 @@ func (s *Service) ReserveStock(ctx context.Context, event events.OrderCreated) e
 			Reason:    "insufficient stock",
 		}
 		body, _ := json.Marshal(errorEvent)
-		return s.rabbitClient.Publish("orders", "stock.insufficient", body)
+		return s.rabbitClient.Publish(rabbitmq.OrdersExchange, rabbitmq.InventoryFailedKey, body, headers)
 	}
 
 	// 3. Reservar
@@ -53,5 +58,5 @@ func (s *Service) ReserveStock(ctx context.Context, event events.OrderCreated) e
 		InventoryReservationID: uuid.New(),
 	}
 	body, _ := json.Marshal(successEvent)
-	return s.rabbitClient.Publish("orders", "inventory.reserved", body)
+	return s.rabbitClient.Publish(rabbitmq.OrdersExchange, rabbitmq.InventoryReservedKey, body, headers)
 }

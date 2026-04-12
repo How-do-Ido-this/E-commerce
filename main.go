@@ -40,6 +40,10 @@ func main() {
 	}
 	defer rabbitClient.Close()
 
+	if err := rabbitClient.SetupTopology(); err != nil {
+		log.Fatalf("No se pudo configurar la topología de RabbitMQ: %v", err)
+	}
+
 	// 3. Wiring
 	orderRepo := order.NewPostgresRepository(dbpool)
 	orderService := order.NewService(orderRepo, rabbitClient)
