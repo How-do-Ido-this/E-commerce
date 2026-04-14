@@ -1,22 +1,110 @@
-# E-commerce Event-Driven Microservices
+# E-commerce Event-Driven Backend (Go)
 
-Este es un proyecto de e-commerce robusto, diseñado con arquitectura hexagonal, comunicaciones asíncronas vía RabbitMQ y patrones SAGA para transacciones distribuidas.
+Backend de e-commerce orientado a **arquitectura event-driven**, construido en Go con foco en patrones de consistencia distribuida.
 
-## 🚀 Arquitectura
-- **Backend:** Go (Golang).
-- **Comunicación:** Event-Driven (RabbitMQ).
-- **Consistencia:** Patrón SAGA para transacciones distribuidas (Orquestación en `OrderService`).
-- **Persistencia:** Postgres (vía `pgx/v5`).
-- **Transporte:** API REST (Echo).
+> Proyecto pensado para portfolio/CV: muestra diseño de SAGA, Outbox, mensajería con RabbitMQ, hardening de concurrencia y testing incremental.
 
-## 🏗️ Estructura del Proyecto
-- `services/`: Contiene los dominios (`order`, `inventory`, `product`, `user`) siguiendo Clean Architecture.
-- `pkg/`: Librerías compartidas (`events` para contratos, `rabbitmq` para el cliente centralizado).
+## ✨ Highlights técnicos
 
-## 🛠️ Cómo correr el proyecto
-1. `docker-compose up -d` para levantar infraestructura.
-2. `go mod tidy` para bajar dependencias.
-3. `go run main.go` para levantar el servidor.
+- **Go + Echo + pgx + RabbitMQ**
+- **SAGA orchestration** (Order inicia, Inventory responde, Order cierra estado)
+- **Outbox Pattern** para consistencia entre DB y broker
+- **Routing explícito** por `routing_key` (sin inferencia por JSON)
+- **Ack/Nack manual** en consumers
+- **Fix anti-overselling** con reserva atómica en PostgreSQL
+- **Validación robusta de input** en el borde HTTP
+- **Tests de hardening** (handler, concurrencia inventory, relay/outbox)
 
----
-*Hecho por [Santino Zarate] - Proyecto de aprendizaje distribuido.*
+## 🧱 Stack
+
+- **Lenguaje:** Go 1.26
+- **HTTP:** Echo v4
+- **DB:** PostgreSQL (pgx/v5)
+- **Mensajería:** RabbitMQ (`amqp091-go`)
+- **Infra local:** Docker Compose
+- **Testing de integración:** Testcontainers
+
+## 🧠 Arquitectura (resumen)
+
+Flujo principal:
+
+1. `POST /orders`
+2. `OrderService` guarda orden + evento en `outbox` (misma transacción)
+3. `Relay` publica `order.created` en exchange `orders`
+4. `InventoryConsumer` procesa y publica `inventory.reserved` o `inventory.failed`
+5. `OrderConsumer` consume respuesta y actualiza estado de la orden
+
+## 📂 Estructura relevante
+
+```text
+.
+├── main.go
+├── pkg/
+│   ├── events/          # Contratos de eventos
+│   └── rabbitmq/        # Cliente, topology setup, publish/consume
+├── services/
+│   ├── order/           # API + saga orchestration + outbox relay
+│   ├── inventory/       # Reserva de stock + respuesta de saga
+│   ├── product/
+│   └── user/
+└── docs/
+    ├── ARQUITECTURA_RESUMIDA.md
+    ├── rabbitmqclient.md
+    ├── inventoryconsumer.md
+    ├── orderconsumer.md
+    ├── relay.md
+    └── services.md
+```
+
+## 🔐 Robustez aplicada
+
+- Reserva de stock **atómica** (`UPDATE ... WHERE quantity_available >= qty`) para evitar overselling.
+- Handler de órdenes con validación de UUID y `quantity > 0`.
+- `order.Service` desacoplado de implementación concreta (sin type assertion a Postgres).
+- Relay con `FOR UPDATE SKIP LOCKED` + orden por `created_at`.
+
+## ✅ Tests relevantes
+
+- `TestTryReserveStockConcurrent_NoOversell` (concurrencia real)
+- `handler_test.go` (inputs inválidos + request válida)
+- `TestRelayProcessOutbox_PublishesAndDeletes` (outbox → broker → delete)
+
+## 🚀 Cómo correr
+
+### Requisitos
+
+- Docker + Docker Compose
+- Go 1.26+
+
+### 1) Infra
+
+```bash
+docker-compose up -d
+```
+
+### 2) Dependencias
+
+```bash
+go mod tidy
+```
+
+### 3) Ejecutar API
+
+```bash
+go run main.go
+```
+
+Server: `http://localhost:8080`
+
+## 🧪 Ejecutar tests
+
+```bash
+go test ./...
+```
+
+> Algunos tests de integración usan Testcontainers (requieren Docker disponible).
+
+## 👤 Autor
+
+**Santino Zarate**  
+Proyecto de aprendizaje profesional con foco en backend distribuido y buenas prácticas de producción.
